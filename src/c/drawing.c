@@ -69,7 +69,6 @@ typedef enum {
 // Main drawing state description, used to determine changes in state
 typedef struct {
   ControlMode control_mode; //< The timer control mode at that state
-  uint8_t hr_digits;        //< The number of digits used by the hours
   uint8_t min_digits;       //< The number of digits used by the minutes
 } DrawState;
 
@@ -78,7 +77,7 @@ static struct {
   Layer *layer;                        //< The main layer being drawn on, used to force a refresh
   int32_t progress_angle;              //< The current angle of the progress ring
   DrawState draw_state;                //< An arbitrary description of the main drawing state
-  GRect text_fields[TEXT_FIELD_COUNT]; //< The number of text fields (hr : min : sec)
+  GRect text_fields[TEXT_FIELD_COUNT]; //< Text fields; indices 2/3/4 are min/colon/sec, 0/1 unused
   GRect focus_field;                   //< The selection field layer
   GColor fore_color;                   //< Color of text
   GColor mid_color;                    //< Color of center
@@ -91,8 +90,7 @@ static struct {
 //
 
 // Update focus layer drawing state
-static void prv_focus_layer_update_state(Layer *layer, GRect hr_bounds, GRect min_bounds,
-                                         GRect sec_bounds) {
+static void prv_focus_layer_update_state(Layer *layer, GRect min_bounds, GRect sec_bounds) {
   // get properties
   GRect bounds = layer_get_bounds(layer);
   // check current control mode
@@ -107,9 +105,7 @@ static void prv_focus_layer_update_state(Layer *layer, GRect hr_bounds, GRect mi
                           CurveSinEaseOut);
   } else {
     // get final bounds when in editing mode
-    if (main_get_control_mode() == ControlModeEditHr) {
-      bounds = hr_bounds;
-    } else if (main_get_control_mode() == ControlModeEditMin) {
+    if (main_get_control_mode() == ControlModeEditMin) {
       bounds = min_bounds;
     } else {
       bounds = sec_bounds;
@@ -192,16 +188,12 @@ static void prv_main_text_update_state(Layer *layer) {
   // get properties
   GRect bounds = layer_get_bounds(layer);
   bool edit_mode = main_get_control_mode() != ControlModeCounting;
-  // calculate time parts
-  uint16_t hr, min, sec;
-  timer_get_time_parts(&hr, &min, &sec);
+  // calculate time parts (hours are not editable, so the minute field holds the total minutes)
+  uint16_t min, sec;
+  timer_get_time_parts(&min, &sec);
   // convert to strings
   char buff[TEXT_FIELD_COUNT][6] = {{'\0'}};
-  if (hr) {
-    snprintf(buff[0], sizeof(buff[0]), edit_mode ? "%02d" : "%d", hr);
-  }
-  snprintf(buff[1], sizeof(buff[1]), "%s", hr && !edit_mode ? ":" : "\0");
-  snprintf(buff[2], sizeof(buff[2]), (hr || edit_mode) ? "%02d" : "%d", min);
+  snprintf(buff[2], sizeof(buff[2]), edit_mode ? "%02d" : "%d", min);
   snprintf(buff[3], sizeof(buff[3]), "%s", edit_mode ? "\0" : ":");
   snprintf(buff[4], sizeof(buff[4]), "%02d", sec);
   // calculate new sizes for all text elements
@@ -236,22 +228,18 @@ static void prv_main_text_update_state(Layer *layer) {
   }
 
   // update the focus layers
-  prv_focus_layer_update_state(layer, field_bounds[0], field_bounds[2], field_bounds[4]);
+  prv_focus_layer_update_state(layer, field_bounds[2], field_bounds[4]);
 }
 
 // Draw main text onto drawing context
 static void prv_render_main_text(GContext *ctx, GRect bounds) {
-  // get time parts
-  uint16_t hr, min, sec;
-  timer_get_time_parts(&hr, &min, &sec);
+  // get time parts (hours are not editable, so the minute field holds the total minutes)
+  uint16_t min, sec;
+  timer_get_time_parts(&min, &sec);
   // convert to strings
   bool edit_mode = main_get_control_mode() != ControlModeCounting;
   char buff[TEXT_FIELD_COUNT][6] = {{'\0'}};
-  if (hr) {
-    snprintf(buff[0], sizeof(buff[0]), edit_mode ? "%02d" : "%d", hr);
-  }
-  snprintf(buff[1], sizeof(buff[1]), "%s", hr && !edit_mode ? ":" : "\0");
-  snprintf(buff[2], sizeof(buff[2]), (hr || edit_mode) ? "%02d" : "%d", min);
+  snprintf(buff[2], sizeof(buff[2]), edit_mode ? "%02d" : "%d", min);
   snprintf(buff[3], sizeof(buff[3]), "%s", edit_mode ? "\0" : ":");
   snprintf(buff[4], sizeof(buff[4]), "%02d", sec);
   // draw the main text elements in their respective bounds
@@ -309,25 +297,22 @@ static void prv_progress_ring_update(void) {
 
 // Compare two different TextStates, return true if conditions are met for a refresh
 static bool prv_text_state_compare(DrawState text_state_1, DrawState text_state_2) {
-  return text_state_1.control_mode == text_state_2.control_mode && // if control modes are different
-         ((text_state_1.control_mode != ControlModeCounting &&     // if in edit mode
-           ((text_state_1.hr_digits && text_state_2.hr_digits) ||
-            (!text_state_1.hr_digits && !text_state_2.hr_digits))) ||
-          (text_state_1.control_mode == ControlModeCounting && // if in counting mode
-           text_state_1.hr_digits == text_state_2.hr_digits &&
-           text_state_1.min_digits == text_state_2.min_digits)) &&
-         text_state_2.hr_digits < 3; // on first start hr is set to 99 to force refresh
+  // in edit mode the layout only depends on the control mode; while counting it also depends on
+  // how many digits the minutes take
+  return text_state_1.control_mode == text_state_2.control_mode &&
+         (text_state_1.control_mode != ControlModeCounting ||
+          text_state_1.min_digits == text_state_2.min_digits) &&
+         text_state_2.min_digits < 4; // on first start min_digits is set to 99 to force refresh
 }
 
 // Create a state description
 static DrawState prv_draw_state_create(void) {
   // get states
-  uint16_t hr, min, sec;
-  timer_get_time_parts(&hr, &min, &sec);
+  uint16_t min, sec;
+  timer_get_time_parts(&min, &sec);
   return (DrawState){
       .control_mode = main_get_control_mode(),
-      .hr_digits = (uint8_t)(hr > 0) + (uint8_t)(hr > 9) + (uint8_t)(hr > 99),
-      .min_digits = (uint8_t)(min > 0) + (uint8_t)(min > 9),
+      .min_digits = (uint8_t)(min > 0) + (uint8_t)(min > 9) + (uint8_t)(min > 99),
   };
 }
 
@@ -351,9 +336,7 @@ void drawing_start_bounce_animation(bool upward) {
   // get the currently selected elements
   // only animate the position of one focus layer, stacking gives appearance of stretching
   GRect *txt_rect;
-  if (main_get_control_mode() == ControlModeEditHr) {
-    txt_rect = &drawing_data.text_fields[0];
-  } else if (main_get_control_mode() == ControlModeEditMin) {
+  if (main_get_control_mode() == ControlModeEditMin) {
     txt_rect = &drawing_data.text_fields[2];
   } else {
     txt_rect = &drawing_data.text_fields[4];
@@ -367,12 +350,9 @@ void drawing_start_bounce_animation(bool upward) {
   animation_grect_start(txt_rect, rect_to, FOCUS_BOUNCE_ANI_SETTLE_DURATION,
                         FOCUS_BOUNCE_ANI_DURATION, CurveSinEaseOut);
   // get focus layer desired bounds
-  GRect focus_bounds = drawing_data.text_fields[0];
-  if (main_get_control_mode() == ControlModeEditMin) {
-    focus_bounds = drawing_data.text_fields[2];
-  } else if (main_get_control_mode() == ControlModeEditSec) {
-    focus_bounds = drawing_data.text_fields[4];
-  }
+  GRect focus_bounds = (main_get_control_mode() == ControlModeEditMin)
+                           ? drawing_data.text_fields[2]
+                           : drawing_data.text_fields[4];
   focus_bounds.origin.y = drawing_data.text_fields[3].origin.y;
   focus_bounds = grect_inset(focus_bounds, GEdgeInsets1(-FOCUS_FIELD_BORDER));
   // animate focus layer
@@ -454,7 +434,7 @@ void drawing_initialize(Layer *layer) {
   drawing_data.focus_field.size = GSizeZero;
   // set initial draw state to something which guaranties a refresh
   drawing_data.draw_state = (DrawState){
-      .hr_digits = 99,
+      .min_digits = 99,
   };
   // set fonts
   GFont font_gothic_24_bold = fonts_get_system_font(FONT_KEY_GOTHIC_24_BOLD);

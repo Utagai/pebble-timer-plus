@@ -50,14 +50,7 @@ static bool main_timer_rewind(void) {
 
 // Set the control mode to match the active timer's current state
 static void prv_sync_control_mode(void) {
-  if (timer_is_paused()) {
-    // get time parts
-    uint16_t hr, min, sec;
-    timer_get_time_parts(&hr, &min, &sec);
-    main_data.control_mode = hr ? ControlModeEditHr : ControlModeEditMin;
-  } else {
-    main_data.control_mode = ControlModeCounting;
-  }
+  main_data.control_mode = timer_is_paused() ? ControlModeEditMin : ControlModeCounting;
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -77,13 +70,9 @@ static void prv_layer_update_proc_handler(Layer *layer, GContext *ctx) {
 static void prv_back_click_handler(ClickRecognizerRef recognizer, void *ctx) {
   // cancel vibrations
   main_timer_rewind();
-  // get time parts
-  uint16_t hr, min, sec;
-  timer_get_time_parts(&hr, &min, &sec);
-  // change control mode
-  if ((hr && main_data.control_mode == ControlModeEditMin) ||
-      main_data.control_mode == ControlModeEditSec) {
-    main_data.control_mode--;
+  // move back one editing field, or leave the app when already editing minutes
+  if (main_data.control_mode == ControlModeEditSec) {
+    main_data.control_mode = ControlModeEditMin;
   } else {
     window_stack_pop(true);
   }
@@ -98,31 +87,9 @@ static void prv_up_click_handler(ClickRecognizerRef recognizer, void *ctx) {
   if (main_timer_rewind() || main_data.control_mode == ControlModeCounting) {
     return;
   }
-  // increment timer
-  int64_t increment;
-  if (main_data.control_mode == ControlModeEditHr) {
-    increment = MSEC_IN_HR;
-  } else if (main_data.control_mode == ControlModeEditMin) {
-    increment = MSEC_IN_MIN;
-  } else {
-    increment = MSEC_IN_SEC;
-  }
-  // get starting time components
-  uint16_t o_hr, o_min, o_sec;
-  timer_get_time_parts(&o_hr, &o_min, &o_sec);
-  // increment timer
+  // increment timer (minutes wrap at 100, seconds wrap at 60)
+  int64_t increment = (main_data.control_mode == ControlModeEditMin) ? MSEC_IN_MIN : MSEC_IN_SEC;
   timer_increment(increment);
-  // compare final time parts and switch into edit hr mode
-  uint16_t n_hr, n_min, n_sec;
-  timer_get_time_parts(&n_hr, &n_min, &n_sec);
-  if (o_min > n_min && !o_hr) {
-    timer_increment(MSEC_IN_HR);
-    main_data.control_mode = ControlModeEditHr;
-  }
-  // check if switched out of ControlModeEditHr
-  if (timer_get_value_ms() / MSEC_IN_HR == 0 && main_data.control_mode == ControlModeEditHr) {
-    main_data.control_mode = ControlModeEditMin;
-  }
   // animate and refresh
   if (!click_recognizer_is_repeating(recognizer)) {
     drawing_start_bounce_animation(true);
@@ -139,9 +106,6 @@ static void prv_select_click_handler(ClickRecognizerRef recognizer, void *ctx) {
   }
   // change timer mode
   switch (main_data.control_mode) {
-  case ControlModeEditHr:
-    main_data.control_mode = ControlModeEditMin;
-    break;
   case ControlModeEditMin:
     main_data.control_mode = ControlModeEditSec;
     break;
@@ -192,20 +156,9 @@ static void prv_down_click_handler(ClickRecognizerRef recognizer, void *ctx) {
   if (main_timer_rewind() || main_data.control_mode == ControlModeCounting) {
     return;
   }
-  // increment timer
-  int64_t increment;
-  if (main_data.control_mode == ControlModeEditHr) {
-    increment = -MSEC_IN_HR;
-  } else if (main_data.control_mode == ControlModeEditMin) {
-    increment = -MSEC_IN_MIN;
-  } else {
-    increment = -MSEC_IN_SEC;
-  }
+  // decrement timer (minutes wrap at 100, seconds wrap at 60)
+  int64_t increment = (main_data.control_mode == ControlModeEditMin) ? -MSEC_IN_MIN : -MSEC_IN_SEC;
   timer_increment(increment);
-  // check if switched out of ControlModeEditHr
-  if (timer_get_value_ms() / MSEC_IN_HR == 0 && main_data.control_mode == ControlModeEditHr) {
-    main_data.control_mode = ControlModeEditMin;
-  }
   // animate and refresh
   if (!click_recognizer_is_repeating(recognizer)) {
     drawing_start_bounce_animation(false);

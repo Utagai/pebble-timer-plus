@@ -154,17 +154,16 @@ void timer_delete(uint8_t index) {
   }
 }
 
-// Get timer value divided into time parts
-void timer_get_time_parts_at(uint8_t index, uint16_t *hr, uint16_t *min, uint16_t *sec) {
+// Get timer value divided into time parts (minutes are the total, not modulo an hour)
+void timer_get_time_parts_at(uint8_t index, uint16_t *min, uint16_t *sec) {
   int64_t value = prv_value_ms(prv_at(index));
-  (*hr) = value / MSEC_IN_HR;
-  (*min) = value % MSEC_IN_HR / MSEC_IN_MIN;
+  (*min) = value / MSEC_IN_MIN;
   (*sec) = value % MSEC_IN_MIN / MSEC_IN_SEC;
 }
 
 // Get the active timer value divided into time parts
-void timer_get_time_parts(uint16_t *hr, uint16_t *min, uint16_t *sec) {
-  timer_get_time_parts_at(timer_store.active, hr, min, sec);
+void timer_get_time_parts(uint16_t *min, uint16_t *sec) {
+  timer_get_time_parts_at(timer_store.active, min, sec);
 }
 
 // Get the active timer time in milliseconds
@@ -270,14 +269,12 @@ void timer_increment(int64_t increment) {
     prv_rewind(timer);
     return;
   }
-  // identify increment class
+  // identify increment class: seconds wrap every minute, minutes wrap every 100 minutes
   int64_t interval;
   if (llabs(increment) < MSEC_IN_MIN) {
     interval = MSEC_IN_MIN;
-  } else if (llabs(increment) < MSEC_IN_HR) {
-    interval = MSEC_IN_HR;
   } else {
-    interval = MSEC_IN_HR * 100;
+    interval = MSEC_IN_MIN * 100;
   }
   // calculate new time by incrementing with wrapping
   int64_t ls_bit = (timer->length_ms + timer->start_ms) % interval;

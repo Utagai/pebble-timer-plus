@@ -13,12 +13,7 @@
 #define BUTTON_HOLD_RESET_MS 750
 
 // Current control mode
-typedef enum {
-  ControlModeEditHr,
-  ControlModeEditMin,
-  ControlModeEditSec,
-  ControlModeCounting
-} ControlMode;
+typedef enum { ControlModeEditMin, ControlModeEditSec, ControlModeCounting } ControlMode;
 
 //! Get the current control mode of the app
 //! @return The current ControlMode

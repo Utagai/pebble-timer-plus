@@ -42,13 +42,9 @@ static struct {
 
 // Format a timer's value into a display string
 static void prv_format_time(uint8_t index, char *buff, size_t size) {
-  uint16_t hr, min, sec;
-  timer_get_time_parts_at(index, &hr, &min, &sec);
-  if (hr) {
-    snprintf(buff, size, "%u:%02u:%02u", hr, min, sec);
-  } else {
-    snprintf(buff, size, "%u:%02u", min, sec);
-  }
+  uint16_t min, sec;
+  timer_get_time_parts_at(index, &min, &sec);
+  snprintf(buff, size, "%u:%02u", min, sec);
 }
 
 //////////////////////////////////////////////////////////////////////////////////////////////////

@@ -100,21 +100,23 @@ There is no unit-test or integration-test target; test manually on emulators and
 `ControlMode` is defined in `main.h`:
 
 ```c
-ControlModeEditHr,
 ControlModeEditMin,
 ControlModeEditSec,
 ControlModeCounting
 ```
 
+There is no hour editing mode. The timer is edited in minutes and seconds only, and the minute field
+represents total minutes (0–99 for editing). See "Editing and wrapping" below.
+
 | Button | Behavior |
 | --- | --- |
 | Up | In edit mode, increment the selected field. Holding repeats every 100 ms. In counting mode, ignored (except for stopping a vibration). |
 | Down | In edit mode, decrement the selected field. Holding repeats every 100 ms. In counting mode, ignored (except for stopping a vibration). |
-| Select (short) | Cycle edit fields: hour → minute → second → counting. In counting mode, pause the timer and return to second editing. |
+| Select (short) | Cycle edit fields: minute → second → counting. In counting mode, pause the timer and return to second editing. |
 | Select (raw press) | Fires on every select press. Cancels vibration and starts the focus-rectangle "reset" animation. |
 | Select (double click) | Reset the active timer to zero and return to minute editing. |
 | Select (long, 750 ms) | Open the timer list window. |
-| Back | In edit mode, move back one field (second → minute → hour). Exits the app when already in hour editing, or when in minute editing with zero hours. In counting mode, exits the app. |
+| Back | In edit mode, move back one field (second → minute). Exits the app when already in minute editing. In counting mode, exits the app. |
 
 ### Timer list window
 
@@ -207,8 +209,10 @@ rewound automatically.
 
 ### Editing and wrapping
 
-`timer_increment()` wraps values within the selected unit interval (minute, hour, or 100 hours) and
-can adjust a paused timer's remaining value. When a timer is chrono and `start_ms` is nonzero,
+`timer_increment()` wraps values within the selected unit interval and can adjust a paused timer's
+remaining value. Seconds wrap every 60 seconds and minutes wrap every 100 minutes, so the minute field
+runs 0–99 (up from `99` wraps to `00`, down from `00` wraps to `99`). There is no hour edit unit, so
+the longest countdown is 99 minutes 59 seconds. When a timer is chrono and `start_ms` is nonzero,
 pressing up/down first rewinds it to its original length and returns without incrementing. If the
 timer's value is under one second, it resets to zero. This function is sensitive to the sign of
 `start_ms`; test positive/negative and chrono/countdown cases when changing it.
@@ -259,19 +263,19 @@ the screen, leaving the ring visible around the edge.
 
 ### Main time text
 
-The time is split into five fields: hours, colon, minutes, colon, seconds. Each field has its own
-`GRect` in `drawing_data.text_fields[]` so fields can animate independently.
+The time is drawn as minutes and seconds. The five-field array (`drawing_data.text_fields[]`, indexed
+hours, colon, minutes, colon, seconds) is retained but the hour field is unused: `timer_get_time_parts()`
+returns the total minutes, which can exceed 59 for long countdowns and stopwatches. Each field has its
+own `GRect` so fields can animate independently.
 
-- Edit mode uses two-digit fields for nonzero values and blank separators, with spacing to keep the
-  layout stable.
-- Counting mode uses `H:MM:SS` when hours are nonzero and `M:SS` when hours are zero. Seconds always
-  use two digits. Minutes use two digits only when hours are nonzero; hours never use a leading
-  zero.
+- Edit mode uses two-digit minute and second fields with a blank separator, with spacing to keep the
+  layout stable. Minutes are always two digits (`00`–`99`).
+- Counting mode uses `M:SS` for fewer than 100 minutes and adds more minute digits as needed once a
+  stopwatch passes 99 minutes. Seconds always use two digits, and minutes never use a leading zero.
 - The font size is chosen so the whole string fits the current bounds. Each field is then drawn with
   `text_render_draw_scalable_text()`.
-- `DrawState` comparison avoids recalculating text positions unless the control mode or digit counts
-  change. The initial state uses `hr_digits = 99` to force the first refresh. Note that the compare
-  condition rejects `hr_digits >= 3`, so 100+ hour values may not trigger a layout refresh.
+- `DrawState` comparison avoids recalculating text positions unless the control mode or the number of
+  minute digits changes. The initial state uses `min_digits = 99` to force the first refresh.
 
 ### Header/footer
 
@@ -284,7 +288,7 @@ The time is split into five fields: hours, colon, minutes, colon, seconds. Each 
 
 ### Focus rectangle
 
-- In edit mode, the focus rectangle surrounds the selected field (hour, minute, or second) with
+- In edit mode, the focus rectangle surrounds the selected field (minute or second) with
   `FOCUS_FIELD_BORDER`.
 - In counting mode, the focus rectangle is animated off-screen to the right.
 - On black-and-white platforms it is filled with a grey dither; on color platforms it uses
@@ -360,8 +364,9 @@ The time is split into five fields: hours, colon, minutes, colon, seconds. Each 
    invalidates existing saved data.
 5. **Progress ring divides by timer length.** `length_ms == 0` is valid for stopwatch mode. Guard the
    division if you touch the ring math.
-6. **Text refresh condition ignores 3-digit hours.** `prv_text_state_compare()` rejects
-   `hr_digits >= 3`, so a timer of 100+ hours may not recalculate the layout.
+6. **Text refresh condition only tracks minute digits.** `prv_text_state_compare()` compares
+   `min_digits` in counting mode, which stops at 3, so a stopwatch running for 1000+ minutes may not
+   recalculate the layout. There is no hour field to compare any more.
 7. **Animation stacking is intentional.** Do not globally "fix" multiple animations per target
    without checking the bounce/reset animations.
 8. **The overtime window is also the acknowledgement window.** After 20 seconds of overtime,
@@ -386,8 +391,11 @@ The time is split into five fields: hours, colon, minutes, colon, seconds. Each 
 ## Manual test checklist
 
 - Build for all seven platforms.
-- Set hours/minutes/seconds with up/down, including wrapping and holding to repeat.
-- Move through edit fields with select/back.
+- Set minutes/seconds with up/down, including wrapping and holding to repeat. Verify the minute field
+  wraps `00`–`99` (down from `00` goes to `99`, up from `99` goes to `00`) and never switches to an
+  hour field.
+- Verify the timer cannot be edited past 99 minutes (the longest countdown is `99:59`).
+- Move through edit fields with select/back (back from minute editing exits the app).
 - Start a countdown; verify the ring shrinks and the display updates each second.
 - Let a countdown expire; verify chrono/overtime counting, vibration, and that select rewinds while
   vibrating.
@@ -407,7 +415,8 @@ The time is split into five fields: hours, colon, minutes, colon, seconds. Each 
   expires.
 - Check 12-hour and 24-hour clock formatting.
 - Check color and black-and-white platforms, round and rectangular displays, and Emery fonts.
-- Watch for animation smoothness and text layout at 1, 2, and 3-digit hour values.
+- Watch for animation smoothness and text layout at 1, 2, and 3-digit minute values (e.g. a stopwatch
+  past 99 minutes).
 - Check the timer list layout on round displays (Chalk/Gabbro) and large displays (Emery).
 
 ## Where to make common changes

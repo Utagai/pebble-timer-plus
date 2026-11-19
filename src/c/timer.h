@@ -35,17 +35,17 @@ uint8_t timer_add(void);
 void timer_delete(uint8_t index);
 
 //! Get the active timer's value divided into time parts
-//! @param hr A pointer to where to store the hour value of the timer
-//! @param min A pointer to where to store the minute value of the timer
+//! The minute value is the total number of minutes (can exceed 59 for long timers or a stopwatch)
+//! @param min A pointer to where to store the total minute value of the timer
 //! @param sec A pointer to where to store the second value of the timer
-void timer_get_time_parts(uint16_t *hr, uint16_t *min, uint16_t *sec);
+void timer_get_time_parts(uint16_t *min, uint16_t *sec);
 
 //! Get a specific timer's value divided into time parts
+//! The minute value is the total number of minutes (can exceed 59 for long timers or a stopwatch)
 //! @param index The index of the timer to read
-//! @param hr A pointer to where to store the hour value of the timer
-//! @param min A pointer to where to store the minute value of the timer
+//! @param min A pointer to where to store the total minute value of the timer
 //! @param sec A pointer to where to store the second value of the timer
-void timer_get_time_parts_at(uint8_t index, uint16_t *hr, uint16_t *min, uint16_t *sec);
+void timer_get_time_parts_at(uint8_t index, uint16_t *min, uint16_t *sec);
 
 //! Get the active timer time in milliseconds
 //! @return The current value of the active timer in milliseconds
