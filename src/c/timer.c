@@ -78,15 +78,20 @@ bool timer_is_chrono(void) {
 bool timer_is_paused(void) { return timer_data.start_ms <= 0; }
 
 // Check if the timer is elapsed and vibrate if this is the first call after elapsing
-void timer_check_elapsed(void) {
+bool timer_check_elapsed(void) {
+  // if a countdown has been counting overtime for the whole vibration window without being
+  // acknowledged, rewind it to its original length so it does not count up indefinitely
+  // (stopwatches have no length and are intentionally left running)
+  if (timer_data.length_ms > 0 && !timer_is_paused() && timer_is_chrono() &&
+      timer_get_value_ms() > VIBRATION_LENGTH_MS) {
+    timer_rewind();
+    return true;
+  }
+  // vibrate
   if (timer_is_vibrating()) {
-    // stop vibration after certain duration
-    if (timer_get_value_ms() > VIBRATION_LENGTH_MS) {
-      timer_data.can_vibrate = false;
-    }
-    // vibrate
     vibes_enqueue_custom_pattern(vibe_pattern);
   }
+  return false;
 }
 
 // Increment timer value currently being edited

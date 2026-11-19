@@ -37,7 +37,8 @@ bool timer_is_chrono(void);
 bool timer_is_paused(void);
 
 //! Check if the timer is elapsed and vibrate if this is the first call after elapsing
-void timer_check_elapsed(void);
+//! @return True if an unacknowledged countdown was rewound to its original length
+bool timer_check_elapsed(void);
 
 //! Increment timer value currently being edited
 //! @param increment The amount to increment by

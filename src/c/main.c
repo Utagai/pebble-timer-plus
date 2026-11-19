@@ -208,8 +208,10 @@ static void prv_click_config_provider(void *ctx) {
 
 // AppTimer callback
 static void prv_app_timer_callback(void *data) {
-  // check if timer is complete
-  timer_check_elapsed();
+  // check if timer is complete, and leave counting mode if it rewound itself
+  if (timer_check_elapsed() && main_data.control_mode == ControlModeCounting) {
+    main_data.control_mode = ControlModeEditSec;
+  }
   // refresh
   drawing_update();
   layer_mark_dirty(main_data.layer);
