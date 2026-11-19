@@ -10,6 +10,7 @@
 #include "main.h"
 #include "drawing.h"
 #include "timer.h"
+#include "timer_list.h"
 #include "utility.h"
 #include <pebble.h>
 
@@ -34,15 +35,29 @@ static void prv_app_timer_callback(void *data);
 
 // Rewind timer if button is clicked to stop vibration
 static bool main_timer_rewind(void) {
-  // check if timer is vibrating
-  if (timer_is_vibrating()) {
-    vibes_cancel();
-    main_data.control_mode = ControlModeEditSec;
-    timer_rewind();
-    drawing_update();
-    return true;
+  // check if any timer is vibrating
+  if (!timer_any_vibrating()) {
+    return false;
   }
-  return false;
+  // rewind any vibrating timers and cancel the vibration
+  bool active_rewound = timer_acknowledge();
+  if (active_rewound) {
+    main_data.control_mode = ControlModeEditSec;
+  }
+  drawing_update();
+  return true;
+}
+
+// Set the control mode to match the active timer's current state
+static void prv_sync_control_mode(void) {
+  if (timer_is_paused()) {
+    // get time parts
+    uint16_t hr, min, sec;
+    timer_get_time_parts(&hr, &min, &sec);
+    main_data.control_mode = hr ? ControlModeEditHr : ControlModeEditMin;
+  } else {
+    main_data.control_mode = ControlModeCounting;
+  }
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -158,6 +173,12 @@ static void prv_select_raw_click_handler(ClickRecognizerRef recognizer, void *ct
 
 // Select long click handler
 static void prv_select_long_click_handler(ClickRecognizerRef recognizer, void *ctx) {
+  // open the timer list to manage the other timers
+  timer_list_push();
+}
+
+// Select multi click handler
+static void prv_select_multi_click_handler(ClickRecognizerRef recognizer, void *ctx) {
   main_data.control_mode = ControlModeEditMin;
   timer_reset();
   // animate and refresh
@@ -202,6 +223,7 @@ static void prv_click_config_provider(void *ctx) {
   window_raw_click_subscribe(BUTTON_ID_SELECT, prv_select_raw_click_handler, NULL, NULL);
   window_long_click_subscribe(BUTTON_ID_SELECT, BUTTON_HOLD_RESET_MS, prv_select_long_click_handler,
                               NULL);
+  window_multi_click_subscribe(BUTTON_ID_SELECT, 2, 2, 0, true, prv_select_multi_click_handler);
   window_single_repeating_click_subscribe(BUTTON_ID_DOWN, BUTTON_HOLD_REPEAT_MS,
                                           prv_down_click_handler);
 }
@@ -215,12 +237,16 @@ static void prv_app_timer_callback(void *data) {
   // refresh
   drawing_update();
   layer_mark_dirty(main_data.layer);
-  // schedule next call
+  timer_list_refresh();
+  // schedule next call while anything is still running
   main_data.app_timer = NULL;
-  if (main_data.control_mode == ControlModeCounting) {
-    uint32_t duration = timer_get_value_ms() % MSEC_IN_SEC;
-    if (timer_is_chrono()) {
-      duration = MSEC_IN_SEC - duration;
+  if (timer_any_running()) {
+    uint32_t duration = MSEC_IN_SEC;
+    if (main_data.control_mode == ControlModeCounting) {
+      duration = timer_get_value_ms() % MSEC_IN_SEC;
+      if (timer_is_chrono()) {
+        duration = MSEC_IN_SEC - duration;
+      }
     }
     main_data.app_timer = app_timer_register(duration + 5, prv_app_timer_callback, NULL);
   }
@@ -230,6 +256,18 @@ static void prv_app_timer_callback(void *data) {
 static void prv_tick_timer_service_callback(struct tm *tick_time, TimeUnits units_changed) {
   // refresh
   layer_mark_dirty(main_data.layer);
+}
+
+// Window appear handler, fires when returning from the timer list
+static void prv_window_appear_handler(Window *window) {
+  // sync the control mode with whichever timer is now active
+  prv_sync_control_mode();
+  if (timer_any_running() && !main_data.app_timer) {
+    prv_app_timer_callback(NULL);
+  } else {
+    drawing_update();
+    layer_mark_dirty(main_data.layer);
+  }
 }
 
 ////////////////////////////////////////////////////////////////////////////////////////////////////
@@ -242,19 +280,17 @@ static void prv_initialize(void) {
   wakeup_cancel_all();
   // load timer
   timer_persist_read();
-  // set initial states
-  if (timer_is_paused()) {
-    // get time parts
-    uint16_t hr, min, sec;
-    timer_get_time_parts(&hr, &min, &sec);
-    if (hr) {
-      main_data.control_mode = ControlModeEditHr;
-    } else {
-      main_data.control_mode = ControlModeEditMin;
+  // when launched by a wakeup, show the timer that fired
+  if (launch_reason() == APP_LAUNCH_WAKEUP) {
+    WakeupId wakeup_id;
+    int32_t cookie;
+    if (wakeup_get_launch_event(&wakeup_id, &cookie) && cookie >= 0 &&
+        cookie < timer_count()) {
+      timer_set_active((uint8_t)cookie);
     }
-  } else {
-    main_data.control_mode = ControlModeCounting;
   }
+  // set initial states
+  prv_sync_control_mode();
 
   // initialize window
   main_data.window = window_create();
@@ -275,6 +311,10 @@ static void prv_initialize(void) {
 
   // initialize drawing singleton
   drawing_initialize(main_data.layer);
+  // handle the window appearing again (e.g. returning from the timer list)
+  window_set_window_handlers(main_data.window, (WindowHandlers){
+                                                 .appear = prv_window_appear_handler,
+                                             });
   // subscribe to tick timer service
   tick_timer_service_subscribe(MINUTE_UNIT, prv_tick_timer_service_callback);
   // start refreshing
@@ -294,13 +334,11 @@ static void prv_initialize(void) {
 static void prv_terminate(void) {
   // unsubscribe from timer service
   tick_timer_service_unsubscribe();
-  // schedule wakeup
-  if (!timer_is_chrono() && !timer_is_paused()) {
-    time_t wakeup_time = (epoch() + timer_get_value_ms()) / MSEC_IN_SEC;
-    wakeup_schedule(wakeup_time, 0, true);
-  }
+  // schedule wakeups for every running countdown timer
+  timer_schedule_wakeups();
   // destroy
   timer_persist_store();
+  timer_list_terminate();
   drawing_terminate();
   layer_destroy(main_data.layer);
   window_destroy(main_data.window);

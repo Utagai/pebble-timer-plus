@@ -4,9 +4,9 @@ This document describes the Timer+ Pebble watchapp for anyone (human or AI) maki
 
 ## Project summary
 
-Timer+ is a native Pebble OS watchapp written in C. It implements a **single** timer with a
-stopwatch/chrono mode. There is no companion JavaScript app, no settings screen, and no automated
-test suite.
+Timer+ is a native Pebble OS watchapp written in C. It implements a list of up to eight independent
+timers, each with a stopwatch/chrono mode. There is no companion JavaScript app, no settings screen,
+and no automated test suite.
 
 Key behavior:
 
@@ -15,6 +15,8 @@ Key behavior:
 - A countdown that reaches zero does **not** stop; it starts counting upward (chrono/overtime) and
   vibrates for the first 20 seconds of overtime. If it is not acknowledged within that window, it
   rewinds itself to the configured duration (paused). Stopwatches keep counting.
+- Multiple timers run independently. A long press on Select opens a timer list to switch between,
+  add, reset, and delete timers.
 - The app supports seven platforms: Aplite, Basalt, Chalk, Diorite, Emery, Flint, and Gabbro.
 - The UI is drawn manually with a custom LECO vector font and a custom animation framework.
 
@@ -64,7 +66,8 @@ There is no unit-test or integration-test target; test manually on emulators and
 | Path | Purpose |
 | --- | --- |
 | `src/c/main.c`, `src/c/main.h` | App lifecycle, window/layer setup, button handling, control-mode state machine, refresh scheduling, wakeup scheduling. |
-| `src/c/timer.c`, `src/c/timer.h` | Timer state, time math, persistence, vibration, stopwatch/chrono logic. |
+| `src/c/timer.c`, `src/c/timer.h` | Timer state, time math, persistence, vibration, stopwatch/chrono logic. Holds the multi-timer store. |
+| `src/c/timer_list.c`, `src/c/timer_list.h` | The timer list window: switching between, adding, resetting, and deleting timers. |
 | `src/c/drawing.c`, `src/c/drawing.h` | All rendering: progress ring, focus rectangle, time text, header/footer text, colors, layout. |
 | `src/c/animation.c`, `src/c/animation.h` | Custom animation engine for `GRect` and `int32_t` values. |
 | `src/c/interpolation.c`, `src/c/interpolation.h` | Easing curves used by the animation engine. |
@@ -110,38 +113,73 @@ ControlModeCounting
 | Down | In edit mode, decrement the selected field. Holding repeats every 100 ms. In counting mode, ignored (except for stopping a vibration). |
 | Select (short) | Cycle edit fields: hour → minute → second → counting. In counting mode, pause the timer and return to second editing. |
 | Select (raw press) | Fires on every select press. Cancels vibration and starts the focus-rectangle "reset" animation. |
-| Select (long, 750 ms) | Reset the timer to zero and return to minute editing. |
+| Select (double click) | Reset the active timer to zero and return to minute editing. |
+| Select (long, 750 ms) | Open the timer list window. |
 | Back | In edit mode, move back one field (second → minute → hour). Exits the app when already in hour editing, or when in minute editing with zero hours. In counting mode, exits the app. |
 
-`BUTTON_HOLD_REPEAT_MS` is 100 ms. `BUTTON_HOLD_RESET_MS` is 750 ms.
+### Timer list window
 
-`main_timer_rewind()` only stops a timer when `timer_is_vibrating()` is true. It cancels vibration,
-sets the control mode to `ControlModeEditSec`, and rewinds the timer to its original length. Once the
-vibration window ends (20 seconds of overtime), `timer_check_elapsed()` rewinds an unacknowledged
-countdown automatically and the app returns to second editing.
+Pushed by a long press on Select. It lists every stored timer with its remaining/elapsed time and a
+running/paused indicator, and highlights the selected one.
+
+| Button | Behavior |
+| --- | --- |
+| Up / Down | Move the highlight. |
+| Select (short) | Open the highlighted timer and return to the main window. |
+| Select (long, 500 ms) | Open a context menu to add a new timer, reset the highlighted timer, or delete it. |
+| Back | Return to the main window (default window pop). |
+
+The main window's `appear` handler re-syncs the control mode to the newly active timer when the list
+is popped. Because the timer list is a separate `Window`, its Back button is the SDK default pop and
+needs no handler.
+
+`BUTTON_HOLD_REPEAT_MS` is 100 ms. `BUTTON_HOLD_RESET_MS` is 750 ms (now the long-press-to-list
+threshold).
+
+`main_timer_rewind()` acknowledges alerts: if any timer is vibrating it cancels vibration and rewinds
+every vibrating timer (`timer_acknowledge()`). If the active timer was among them it sets the control
+mode to `ControlModeEditSec`. Once the vibration window ends (20 seconds of overtime),
+`timer_check_elapsed()` rewinds an unacknowledged countdown automatically and the app returns to
+second editing.
 
 ### Refresh scheduling
 
-- While counting, `prv_app_timer_callback()` schedules an `AppTimer` for the next whole-second
-  boundary (`+5 ms`). For a countdown it uses the remaining milliseconds; for chrono it uses the
-  elapsed milliseconds. This keeps the displayed seconds accurate without running at 30 fps.
+- `prv_app_timer_callback()` runs while **any** timer is running (not just the active one), so
+  background timers keep counting and can vibrate while the app is open. While the active timer is
+  counting it schedules the next tick for the next whole-second boundary (`+5 ms`); otherwise it
+  ticks once a second.
+- The same tick calls `timer_list_refresh()`, which is how the timer list updates live while it is
+  visible.
 - `tick_timer_service_subscribe(MINUTE_UNIT, ...)` marks the layer dirty once per minute. This
-  updates the footer clock while paused/editing. While counting, the app timer already refreshes
-  every second.
+  updates the footer clock while paused/editing.
 - The animation engine runs its own 30 ms timer while animations are active.
 
 ## Timer model (`timer.c`)
 
-The persisted state is a raw `Timer` struct:
+The persisted state is a `TimerStore` containing a count, the active index, and a fixed array of
+`Timer` structs:
 
 ```c
+#define MAX_TIMERS 8
+
 typedef struct {
   int64_t length_ms; // total timer length
   int64_t start_ms;  // start epoch when running; negative elapsed time when paused
   bool elapsed;      // declared but currently unused
   bool can_vibrate;  // whether the timer should vibrate after elapsing
 } Timer;
+
+typedef struct {
+  uint8_t count;            // number of valid timers (always at least 1)
+  uint8_t active;           // index of the timer the UI is working with
+  Timer   timers[MAX_TIMERS];
+} TimerStore;
 ```
+
+The public `timer_*()` functions operate on the **active** timer, so the rest of the app did not have
+to change. Index-aware variants (`timer_*_at(index)`) exist for the list window. `timer_count()`,
+`timer_set_active()`, `timer_add()`, and `timer_delete()` manage the store, which never drops below
+one timer.
 
 ### Semantics
 
@@ -178,13 +216,17 @@ timer's value is under one second, it resets to zero. This function is sensitive
 
 ### Persistence and wakeups
 
-- `timer_persist_store()` writes a version key and the raw `Timer` struct.
-- `timer_persist_read()` reads the current key. It also deletes a legacy key (`3456`) and, if the app
-  was launched by a wakeup, applies a 5-second increment and toggles play/pause. The version key is
-  written but not currently read or validated.
+- `timer_persist_store()` writes a version key and the raw `TimerStore` struct (count, active index,
+  and the `Timer` array) under a single key.
+- `timer_persist_read()` reads the current store key. If only the legacy single-timer key exists it
+  migrates that timer into slot 0 and deletes the old key. It also deletes a legacy key (`3456`) and,
+  if the app was launched by a wakeup, applies a 5-second increment and toggles play/pause. The
+  version key is written but not currently read or validated.
+- `TimerStore` is about 200 bytes, within the 256-byte `persist_write_data` limit.
 - On exit, `prv_terminate()` schedules a wakeup only for a running, non-chrono timer. The wakeup time
   is `(epoch() + remaining_ms) / 1000`, so it is truncated to whole seconds and can fire up to one
-  second early. Chrono timers do not schedule wakeups.
+  second early. Chrono timers do not schedule wakeups. **Only the active timer schedules a wakeup**;
+  background timers are not yet covered, so they will not relaunch the app once it is closed.
 
 ## Rendering (`drawing.c`)
 
@@ -300,8 +342,8 @@ The time is split into five fields: hours, colon, minutes, colon, seconds. Each 
 - Use `ASSERT()` for pointer/state checks and `MALLOC()` for allocations that must succeed.
 - Use `epoch()` for millisecond timestamps; it combines `time()` and `time_ms()`.
 - Use `PBL_IF_COLOR_ELSE`, `PBL_BW`, `PBL_ROUND`, and `PBL_PLATFORM_*` for platform differences.
-- Keep the UI simple. This is intentionally a single-timer app.
-- `timer.h` is the only header without `#pragma once`; adding one is safe if you touch it.
+- Keep the UI simple. The app supports several timers, but only one is shown and edited at a time.
+- `timer.h` has `#pragma once`.
 - The app has no JavaScript and `enableMultiJS` is false. `wscript` still references `src/pkjs`
   paths, but that directory does not exist. If you add JS, enable multi-JS and provide the entry
   file.
@@ -314,8 +356,9 @@ The time is split into five fields: hours, colon, minutes, colon, seconds. Each 
 2. **Chrono is not only "started from zero".** A countdown that hits zero becomes chrono. This is
    intentional and drives the overtime vibration.
 3. **`Timer.elapsed` is unused.** Do not assume it is maintained.
-4. **Persistence is a raw struct.** There is no real schema migration. The version key is written but
-   not read. Changing the `Timer` struct layout will invalidate existing saved timers.
+4. **Persistence is a raw struct.** The version key is written but not read. There is a migration
+   from the legacy single-timer key into slot 0, but changing the `TimerStore`/`Timer` layout still
+   invalidates existing saved data.
 5. **Progress ring divides by timer length.** `length_ms == 0` is valid for stopwatch mode. Guard the
    division if you touch the ring math.
 6. **Text refresh condition ignores 3-digit hours.** `prv_text_state_compare()` rejects
@@ -324,12 +367,21 @@ The time is split into five fields: hours, colon, minutes, colon, seconds. Each 
    without checking the bounce/reset animations.
 8. **The overtime window is also the acknowledgement window.** After 20 seconds of overtime,
    `timer_check_elapsed()` rewinds an unacknowledged countdown to its original length and the app
-   returns to second editing, so overtime never accumulates indefinitely. Long select still resets.
-9. **Raw select fires on every press.** It cancels vibration and starts the reset animation even for
-   short presses. This is existing behavior.
-10. **Wakeup precision is one second.** Wakeups are scheduled from truncated whole seconds and may
-    fire up to one second early. Chrono timers do not schedule wakeups.
-11. **`animation_stop_all()` is shutdown-only.** It leaves stale list/timer pointers after freeing
+   returns to second editing, so overtime never accumulates indefinitely. Double-click select resets;
+   long press opens the timer list.
+9. **Raw select fires on every press.** It cancels the vibration device and starts the reset
+   animation even for short presses, but it does not rewind the timer state, so a still-vibrating
+   timer will re-trigger vibration on the next tick.
+10. **Adding multi-click delays single-click.** Because select has a long-click and a double-click
+    handler, a single select click is only recognized after the click window closes, so starting or
+    pausing has a small built-in delay.
+11. **Wakeups are one-second precision and at least a minute apart.** `timer_schedule_wakeups()`
+    schedules one wakeup per running countdown (earliest first) and skips any that fall within a
+    minute of an already scheduled one, because the SDK rejects those. Chrono timers never schedule
+    wakeups. The cookie is the timer index; a wakeup launch makes that timer active. If several
+    timers expire close together, only the first gets a wakeup and the rest are handled once the app
+    is open.
+12. **`animation_stop_all()` is shutdown-only.** It leaves stale list/timer pointers after freeing
     nodes.
 
 ## Manual test checklist
@@ -343,18 +395,27 @@ The time is split into five fields: hours, colon, minutes, colon, seconds. Each 
 - Leave a countdown unacknowledged past 20 seconds of overtime; verify it rewinds to the configured
   duration (paused) and returns to second editing.
 - Verify a stopwatch keeps counting past 20 seconds instead of rewinding.
-- Verify long select resets to zero from edit, counting, and overtime states.
+- Verify double-click select resets to zero from edit, counting, and overtime states.
 - Start from `0:00`; verify stopwatch mode, ring behavior, and that up/down can convert it to a timer.
+- Long press select to open the timer list; verify up/down move the highlight, select opens the
+  highlighted timer, long press opens the New/Reset/Delete menu, and back returns.
+- Add several timers; verify each keeps its own time and running/paused state.
+- Start one timer and leave a different timer active; verify the running timer still counts down and
+  alerts, and that its row updates live in the list.
+- Delete timers down to one and verify the app always keeps a timer.
 - Close and reopen the app with a paused timer, a running timer, and a stopwatch; verify persistence.
-- Exit with a running countdown and verify the wakeup launches the app when the timer expires.
+- Exit with several running countdowns and verify the wakeups launch the app when the earliest one
+  expires.
 - Check 12-hour and 24-hour clock formatting.
 - Check color and black-and-white platforms, round and rectangular displays, and Emery/Gabbro fonts.
 - Watch for animation smoothness and text layout at 1, 2, and 3-digit hour values.
+- Check the timer list layout on round displays (Chalk/Gabbro) and large displays (Emery/Gabbro).
 
 ## Where to make common changes
 
-- **Timer semantics / persistence / vibration:** `src/c/timer.c`, `src/c/timer.h`.
+- **Timer semantics / persistence / vibration / wakeups:** `src/c/timer.c`, `src/c/timer.h`.
 - **Button behavior / control-mode transitions:** `src/c/main.c`.
+- **Timer list (switch/add/reset/delete timers):** `src/c/timer_list.c`, `src/c/timer_list.h`.
 - **Layout, colors, ring, focus rectangle, header/footer:** `src/c/drawing.c`.
 - **Font glyphs or text measurement:** `src/c/text_render.c`.
 - **Animation timing/easing:** `src/c/animation.c`, `src/c/interpolation.c`.
