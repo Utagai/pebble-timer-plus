@@ -17,7 +17,7 @@ Key behavior:
   rewinds itself to the configured duration (paused). Stopwatches keep counting.
 - Multiple timers run independently. A long press on Select opens a timer list to switch between,
   add, reset, and delete timers.
-- The app supports seven platforms: Aplite, Basalt, Chalk, Diorite, Emery, Flint, and Gabbro.
+- The app supports seven platforms: Emery ONLY.
 - The UI is drawn manually with a custom LECO vector font and a custom animation framework.
 
 ## Build and run
@@ -48,11 +48,10 @@ listed in `package.json` (see `wscript`).
 ### Install and inspect on an emulator
 
 ```sh
-pebble install --emulator basalt
-pebble logs --emulator basalt
+pebble install --emulator emery
+pebble logs --emulator emery
 ```
 
-Use any supported platform name (`aplite`, `basalt`, `chalk`, `diorite`, `emery`, `flint`, `gabbro`).
 There is no unit-test or integration-test target; test manually on emulators and/or a device.
 
 ### Formatting
@@ -73,7 +72,7 @@ There is no unit-test or integration-test target; test manually on emulators and
 | `src/c/interpolation.c`, `src/c/interpolation.h` | Easing curves used by the animation engine. |
 | `src/c/text_render.c`, `src/c/text_render.h` | LECO vector font renderer for digits and colon. |
 | `src/c/utility.c`, `src/c/utility.h` | Assertions, checked malloc, millisecond epoch, Aplite compatibility, grey fill. |
-| `resources/fonts/` | Custom Bebas Neue font used on Emery/Gabbro. |
+| `resources/fonts/` | Custom Bebas Neue font used on Emery. |
 | `resources/images/` | App menu icons. |
 | `assets/` | Marketing screenshots, banners, and source art. Not packaged into the app. |
 | `package.json` | Pebble app metadata, UUID, target platforms, resources, npm dependency. |
@@ -304,7 +303,7 @@ The time is split into five fields: hours, colon, minutes, colon, seconds. Each 
 - Platform conditionals:
   - `PBL_ROUND` for round displays (Chalk, Gabbro).
   - `PBL_BW` for black-and-white displays (Aplite, Diorite, Flint).
-  - `PBL_PLATFORM_*` for header/footer offsets on Emery/Gabbro.
+  - `PBL_PLATFORM_*` for header/footer offsets on Emery.
   - `PBL_SDK_2` compatibility paths for the original Pebble SDK.
 
 ## Animation framework (`animation.c`)
@@ -407,9 +406,9 @@ The time is split into five fields: hours, colon, minutes, colon, seconds. Each 
 - Exit with several running countdowns and verify the wakeups launch the app when the earliest one
   expires.
 - Check 12-hour and 24-hour clock formatting.
-- Check color and black-and-white platforms, round and rectangular displays, and Emery/Gabbro fonts.
+- Check color and black-and-white platforms, round and rectangular displays, and Emery fonts.
 - Watch for animation smoothness and text layout at 1, 2, and 3-digit hour values.
-- Check the timer list layout on round displays (Chalk/Gabbro) and large displays (Emery/Gabbro).
+- Check the timer list layout on round displays (Chalk/Gabbro) and large displays (Emery).
 
 ## Where to make common changes
 
