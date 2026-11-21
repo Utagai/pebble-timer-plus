@@ -24,6 +24,7 @@ static struct {
   Layer *layer;             //< The base layer on which everything will be drawn
   ControlMode control_mode; //< The current control mode of the timer
   AppTimer *app_timer;      //< The AppTimer to keep the screen refreshing
+  bool advanced_on_down;    //< The raw select press already advanced minutes -> seconds
 } main_data;
 
 // Function declarations
@@ -100,8 +101,16 @@ static void prv_up_click_handler(ClickRecognizerRef recognizer, void *ctx) {
 
 // Select click handler
 static void prv_select_click_handler(ClickRecognizerRef recognizer, void *ctx) {
+  // consume the advance that the raw press may have already performed
+  bool advanced_on_down = main_data.advanced_on_down;
+  main_data.advanced_on_down = false;
   // rewind timer if clicked while timer is going off
   if (main_timer_rewind()) {
+    return;
+  }
+  // the raw press already moved from minutes to seconds; nothing left to do
+  if (advanced_on_down) {
+    layer_mark_dirty(main_data.layer);
     return;
   }
   // change timer mode
@@ -130,8 +139,17 @@ static void prv_select_click_handler(ClickRecognizerRef recognizer, void *ctx) {
 static void prv_select_raw_click_handler(ClickRecognizerRef recognizer, void *ctx) {
   // stop vibration
   vibes_cancel();
-  // animate and refresh
-  drawing_start_reset_animation();
+  // advancing from minutes to seconds should feel immediate, so do it on the raw press instead of
+  // waiting for the click window (required by the long/double click handlers) to close
+  bool advancing = main_data.control_mode == ControlModeEditMin;
+  main_data.advanced_on_down = advancing;
+  if (advancing) {
+    main_data.control_mode = ControlModeEditSec;
+    drawing_update();
+  } else {
+    // animate and refresh
+    drawing_start_reset_animation();
+  }
   layer_mark_dirty(main_data.layer);
 }
 
